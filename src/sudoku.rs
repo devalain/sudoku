@@ -12,38 +12,59 @@ pub enum Digit {
     D9,
 }
 pub type Idx = (Digit, Digit);
+pub struct Square {
+    first_row: u8,
+    first_col: u8,
+    cur: u8,
+}
+impl Square {
+    fn new(num: Digit) -> Self {
+        let d = u8::from(num) - 1;
+        let first_row = (d / 3) * 3 + 1;
+        let first_col = (d % 3) * 3 + 1;
+        Self {
+            first_row,
+            first_col,
+            cur: 0,
+        }
+    }
+}
+impl Iterator for Square {
+    type Item = Idx;
+    fn next(&mut self) -> Option<Self::Item> {
+        let row = self.first_row + self.cur / 3;
+        let col = self.first_col + self.cur % 3;
+        self.cur += 1;
+        if self.cur <= 9 {
+            Some((row.try_into().unwrap(), col.try_into().unwrap()))
+        } else {
+            None
+        }
+    }
+}
 impl Digit {
-    pub fn all() -> impl Iterator<Item = Self> {
+    pub fn all() -> &'static [Self] {
         use Digit::*;
-        vec![D1, D2, D3, D4, D5, D6, D7, D8, D9].into_iter()
+        static ALL: [Digit; 9] = [D1, D2, D3, D4, D5, D6, D7, D8, D9];
+        &ALL
     }
     pub fn all_indices() -> Vec<Idx> {
         let mut v = Vec::with_capacity(81);
-        for l in Self::all() {
-            for c in Self::all() {
+        for &l in Self::all() {
+            for &c in Self::all() {
                 v.push((l, c));
             }
         }
         v
     }
     pub fn row(self) -> impl Iterator<Item = Idx> {
-        Self::all().map(move |col| (self, col))
+        Self::all().iter().map(move |&col| (self, col))
     }
     pub fn col(self) -> impl Iterator<Item = Idx> {
-        Self::all().map(move |row| (row, self))
+        Self::all().iter().map(move |&row| (row, self))
     }
-    pub fn square(self) -> impl Iterator<Item = Idx> {
-        let d = u8::from(self) - 1;
-        let mut v = Vec::with_capacity(9);
-
-        let first_row = (d / 3) * 3 + 1;
-        let first_col = (d % 3) * 3 + 1;
-        for n in 0..9 {
-            let row = first_row + n / 3;
-            let col = first_col + n % 3;
-            v.push((row.try_into().unwrap(), col.try_into().unwrap()));
-        }
-        v.into_iter()
+    pub fn square(self) -> Square {
+        Square::new(self)
     }
     pub fn square_of(row: Digit, col: Digit) -> Self {
         let row = u8::from(row);
@@ -52,13 +73,13 @@ impl Digit {
             (1..=3, 1..=3) => Self::D1,
             (1..=3, 4..=6) => Self::D2,
             (1..=3, 7..=9) => Self::D3,
-            (4..=5, 1..=3) => Self::D4,
-            (4..=5, 4..=6) => Self::D5,
-            (4..=5, 7..=9) => Self::D6,
+            (4..=6, 1..=3) => Self::D4,
+            (4..=6, 4..=6) => Self::D5,
+            (4..=6, 7..=9) => Self::D6,
             (7..=9, 1..=3) => Self::D7,
             (7..=9, 4..=6) => Self::D8,
             (7..=9, 7..=9) => Self::D9,
-            _ => unreachable!(),
+            (r, c) => unreachable!("({}, {})", r, c),
         }
     }
 }
@@ -84,11 +105,19 @@ impl TryFrom<u8> for Digit {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Move(Idx, Digit);
 impl From<(Idx, Digit)> for Move {
     fn from((idx, d): (Idx, Digit)) -> Self {
         Self(idx, d)
+    }
+}
+impl Move {
+    pub fn pos(&self) -> Idx {
+        self.0
+    }
+    pub fn digit(&self) -> Digit {
+        self.1
     }
 }
 
@@ -116,14 +145,14 @@ impl std::ops::IndexMut<Idx> for Sudoku {
 impl std::fmt::Display for Sudoku {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "+-----+-----+-----+")?;
-        for l in Digit::all() {
+        for &l in Digit::all() {
             match l {
                 Digit::D4 | Digit::D7 => {
                     write!(f, "+-----+-----+-----+\n|")?;
                 }
                 _ => write!(f, "|")?,
             }
-            for c in Digit::all() {
+            for &c in Digit::all() {
                 let idx = (l, c);
                 let sep = match c {
                     Digit::D3 | Digit::D6 | Digit::D9 => "|",
@@ -151,33 +180,98 @@ impl Sudoku {
     pub fn new(array: [Option<Digit>; 81]) -> Self {
         Self(array)
     }
-    pub fn row(&self, num: Digit) -> impl Iterator<Item = Option<Digit>> + '_ {
-        num.row().map(|idx| self[idx].clone())
+    pub fn row(&self, num: Digit) -> impl Iterator<Item = Digit> + '_ {
+        num.row().map(|idx| self[idx].clone()).flatten()
     }
-    pub fn col(&self, num: Digit) -> impl Iterator<Item = Option<Digit>> + '_ {
-        num.col().map(|idx| self[idx].clone())
+    pub fn col(&self, num: Digit) -> impl Iterator<Item = Digit> + '_ {
+        num.col().map(|idx| self[idx].clone()).flatten()
     }
-    pub fn square(&self, num: Digit) -> impl Iterator<Item = Option<Digit>> + '_ {
-        num.square().map(|idx| self[idx].clone())
+    pub fn square(&self, num: Digit) -> impl Iterator<Item = Digit> + '_ {
+        num.square().map(|idx| self[idx].clone()).flatten()
+    }
+    pub fn possible_moves(&self, idx: Idx) -> PossibleMoves {
+        PossibleMoves::new(self, idx)
+    }
+    pub fn empty_indices(&self) -> EmptyIndices<'_> {
+        EmptyIndices::new(self)
     }
     pub fn play(&mut self, Move(idx, digit): Move) -> Result<(), MoveError> {
         if self[idx].is_some() {
             Err(MoveError::NonEmpty)
         } else {
-            let (row, col) = idx;
-            let square_num = Digit::square_of(row, col);
-            let row_digits: Vec<_> = self.row(row).flatten().collect();
-            let col_digits: Vec<_> = self.col(col).flatten().collect();
-            let square_digits: Vec<_> = self.square(square_num).flatten().collect();
-            if row_digits.contains(&digit)
-                || col_digits.contains(&digit)
-                || square_digits.contains(&digit)
-            {
+            let moves: Vec<_> = self.possible_moves(idx).map(|m| m.digit()).collect();
+            if !moves.contains(&digit) {
                 Err(MoveError::Invalid)
             } else {
                 self[idx] = Some(digit);
                 Ok(())
             }
+        }
+    }
+}
+
+pub struct PossibleMoves {
+    idx: Idx,
+    f: Vec<Digit>,
+}
+impl PossibleMoves {
+    fn new(sudoku: &Sudoku, idx: Idx) -> Self {
+        let (row, col) = idx;
+        let mut f = Vec::from(Digit::all());
+        let mut a = Vec::with_capacity(9);
+        for d in sudoku
+            .row(row)
+            .chain(sudoku.col(col))
+            .chain(sudoku.square(Digit::square_of(row, col)))
+        {
+            if !a.contains(&d) {
+                a.push(d);
+            }
+        }
+        f.retain(|digit| !a.contains(digit));
+        Self { idx, f }
+    }
+}
+impl Iterator for PossibleMoves {
+    type Item = Move;
+    fn next(&mut self) -> Option<Move> {
+        self.f.pop().map(|d| (self.idx, d).into())
+    }
+}
+
+pub struct EmptyIndices<'s> {
+    sudoku: &'s Sudoku,
+    row: u8,
+    col: u8,
+}
+impl<'s> EmptyIndices<'s> {
+    fn new(sudoku: &'s Sudoku) -> Self {
+        Self {
+            sudoku,
+            row: 1,
+            col: 1,
+        }
+    }
+    fn next_idx(&mut self) -> Option<Idx> {
+        let next = (self.row.try_into().ok()?, self.col.try_into().ok()?);
+        if self.col < 9 {
+            self.col += 1;
+        } else if self.row <= 9 {
+            self.col = 1;
+            self.row += 1;
+        }
+        Some(next)
+    }
+}
+impl<'s> Iterator for EmptyIndices<'s> {
+    type Item = Idx;
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut idx = self.next_idx()?;
+        loop {
+            if self.sudoku[idx].is_none() {
+                break Some(idx);
+            }
+            idx = self.next_idx()?;
         }
     }
 }
@@ -200,7 +294,8 @@ macro_rules! smove {
         (
             ($r.try_into().unwrap(), $c.try_into().unwrap()),
             $d.try_into().unwrap(),
-        ).into()
+        )
+            .into()
     };
 }
 
@@ -346,5 +441,36 @@ mod tests {
                 (D9, D9)
             ]
         );
+    }
+
+    #[test]
+    fn sudoku_moves() {
+        let mut sudoku = sudoku![
+            5 3 0 0 7 0 0 0 0
+            6 0 0 1 9 5 0 0 0
+            0 9 8 0 0 0 0 6 0
+            8 0 0 0 6 0 0 0 3
+            4 0 0 8 0 3 0 0 1
+            7 0 0 0 2 0 0 0 6
+            0 6 0 0 0 0 2 8 0
+            0 0 0 4 1 9 0 0 5
+            0 0 0 0 8 0 0 7 9
+        ];
+
+        assert!(sudoku.play(smove!(1,3;1)).is_ok());
+        assert!(matches!(
+            sudoku.play(smove!(1,3;1)),
+            Err(MoveError::NonEmpty)
+        ));
+        assert!(matches!(
+            sudoku.play(smove!(1,4;1)),
+            Err(MoveError::Invalid)
+        ));
+    }
+
+    #[test]
+    fn empty_indices_empty() {
+        let sudoku = Sudoku::default();
+        assert_eq!(sudoku.empty_indices().count(), 81);
     }
 }
